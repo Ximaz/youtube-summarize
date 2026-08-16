@@ -1,0 +1,116 @@
+# yt-dlp is pinned exactly, but it is also the one dependency YouTube breaks on
+# a schedule. The resolution is a hard pin plus a fast, gated bump path: this
+# job proposes the upgrade and proves it still works. It never auto-merges.
+name: Bump yt-dlp
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - run: corepack enable
+
+      - name: Install uv (pinned)
+        run: pipx install uv==0.12.1
+
+      - name: Compare pinned version against PyPI
+        id: check
+        working-directory: services/extractor
+        run: |
+          set -euo pipefail
+          current="$(sed -nE 's/^yt-dlp\[.*\]==(.+)$/\1/p' requirements.txt)"
+          latest="$(python -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json"))["info"]["version"])')"
+          # `latest` is third-party input. Constrain it to a version literal
+          # before it is ever used, so it cannot carry shell or workflow syntax.
+          if ! printf '%s' "$latest" | grep -qE '^[0-9]+(\.[0-9]+)*$'; then
+            echo "refusing implausible version from PyPI: $latest" >&2
+            exit 1
+          fi
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Repin and relock
+        if: steps.check.outputs.changed == 'true'
+        working-directory: services/extractor
+        # Passed through env rather than ${{ }} interpolation: a ${{ }} value is
+        # pasted into the script before the shell sees it, so third-party input
+        # there is script injection. "$LATEST" is just a string to the shell.
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^(yt-dlp\[.*\]==).+$/\1${LATEST}/" requirements.txt
+          uv pip compile requirements.txt --generate-hashes --python-version 3.13 \
+            --python-platform aarch64-unknown-linux-gnu -o requirements.lock
+
+      # The image build runs --check-extractor --assert-ready, which is the
+      # real gate: it fails if the new pin loses impersonation or the JS runtime.
+      - name: Build the extractor image
+        if: steps.check.outputs.changed == 'true'
+        run: docker compose build extractor
+
+      - name: Offline suites
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          (cd services/extractor && python -m unittest discover -s tests -t .)
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+
+      # Live gate. Extraction needs no Anthropic credential, so this genuinely
+      # exercises the path that YouTube changes break.
+      - name: Live smoke test
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          docker compose --progress quiet run --rm -T extractor dQw4w9WgXcQ \
+            | python -c 'import json,sys; n=len(json.load(sys.stdin)["transcript"]["segments"]); print(f"{n} segments"); sys.exit(0 if n else 1)'
+
+      - name: Open a pull request
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.check.outputs.current }}
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          branch="bump/yt-dlp-${LATEST}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "PR branch already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add services/extractor/requirements.txt services/extractor/requirements.lock
+          git commit -m "build: bump yt-dlp ${CURRENT} -> ${LATEST}"
+          git push origin "$branch"
+          gh pr create \
+            --title "build: bump yt-dlp ${CURRENT} -> ${LATEST}" \
+            --body "Automated pin bump. The image build assertion, both offline suites, and the live extraction smoke test passed. Review and merge deliberately — this is the dependency that decides whether captions can be fetched at all."

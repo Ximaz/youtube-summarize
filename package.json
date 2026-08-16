@@ -1,0 +1,28 @@
+{
+  "name": "youtube-summarize",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Answer what a YouTube video actually promised and whether it applies to you, without watching it.",
+  "bin": {
+    "summarize": "src/cli.ts"
+  },
+  "engines": {
+    "node": "24.18.0"
+  },
+  "packageManager": "pnpm@11.18.0",
+  "scripts": {
+    "summarize": "node src/cli.ts",
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "extractor:check": "docker compose --progress quiet run --rm -T extractor --check-extractor",
+    "extractor:test": "cd services/extractor && python3 -m unittest discover -s tests -t ."
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "typescript": "7.0.2"
+  }
+}

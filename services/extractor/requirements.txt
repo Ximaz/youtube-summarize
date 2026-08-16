@@ -1,0 +1,14 @@
+# Extraction is a moving target: YouTube changes break yt-dlp on a schedule.
+# The pin is exact anyway (see README "Updating the extractor"); the `pin*`
+# extras additionally hand transitive version selection to yt-dlp's own tested
+# set rather than to whatever resolved on build day.
+#
+# curl-cffi is NOT optional: yt-dlp marks every subtitle entry `impersonate:
+# True` because the timedtext endpoint TLS-fingerprints. Without an
+# impersonation backend yt-dlp warns and fetches bare, which fails in a way
+# that is indistinguishable from "this video has no captions".
+#
+# deno satisfies yt-dlp's external-JS-runtime requirement (mandatory since
+# 2025.11.12) through the same pinned manifest instead of a second package
+# manager.
+yt-dlp[default,pin,curl-cffi,pin-curl-cffi,deno,pin-deno]==2026.7.4

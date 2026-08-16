@@ -1,0 +1,20 @@
+# The extractor is invoked per run, not served:
+#     docker compose run --rm extractor <videoId>
+# There is no `ports:` key and nothing listens. That is deliberate -- a
+# one-shot process per CLI invocation needs no socket, and without one there is
+# no request-forgery surface to defend.
+name: youtube-summarize
+
+services:
+  extractor:
+    build:
+      context: ./services/extractor
+    image: youtube-summarize-extractor:local
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # yt-dlp caches extractor state and yt-dlp-ejs stages its solver here.
+      - /tmp:rw,nosuid,size=128m

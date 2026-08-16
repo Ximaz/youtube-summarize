@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.log
+
+# Python bytecode from running the extractor's tests on the host
+__pycache__/
+*.pyc
+CLAUDE.local.md
